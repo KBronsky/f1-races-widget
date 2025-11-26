@@ -1,146 +1,173 @@
-import puppeteer from "puppeteer";
-import * as cheerio from "cheerio";
-import fs from "fs";
+import puppeteer from 'puppeteer';
+import * as cheerio from 'cheerio';
+import fs from 'fs';
+import { setTimeout } from "node:timers/promises";
 
 const URL = "https://www.formula1.com/en/racing/2025.html";
 
-async function getRaces(page) {
-    const html = await page.content();
-    const $ = cheerio.load(html);
-
-    const races = [];
-
-    $(".f1-event-card").each((i, el) => {
-        const title = $(el).find(".f1-bold--xs").first().text().trim() ||
-                      $(el).find("h3").text().trim();
-        
-        const dateRaw = $(el)
-            .find('.typography-module_technical-xs-regular__-W0Gs')
-            .first()
-            .text()
-            .trim();
-
-        // Пример: "21 - 23 Mar"
-        const parsedDate = parseRaceDate(dateRaw);
-
-        races.push({
-            title,
-            dateRaw,
-            dateStart: parsedDate?.start || null,
-            dateEnd: parsedDate?.end || null,
-            element: el
-        });
-    });
-
-    return races;
+function parseRaceDate(dateText) {
+  const parts = dateText.split(/\s+/).filter(Boolean);
+  const dayEnd = parseInt(parts[2], 10);
+  const monthStr = parts[3];
+  const monthMap = { Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5, Jul:6, Aug:7, Sep:8, Oct:9, Nov:10, Dec:11 };
+  const month = monthMap[monthStr] ?? 0;
+  return new Date(2025, month, dayEnd);
 }
 
-function parseRaceDate(str) {
-    if (!str) return null;
+async function findBoundingBoxForRace(page, match) {
+  await page.waitForSelector('a.group', { timeout: 30000 });
 
-    // Форматы:
-    // "21 - 23 Mar"
-    // "5 - 7 Sep"
-    // "30 Nov - 2 Dec"
+  // стабилизатор DOM после рендера React
+  await setTimeout(600);
 
-    const parts = str.split(" ");
-
-    if (parts.length < 3) return null;
-
-    const dayStart = parseInt(parts[0]);
-    const dayEnd = parseInt(parts[2]);
-    const monthRaw = parts[3] || parts[2];
-    const month = monthRaw.substring(0, 3);
-
-    const monthMap = {
-        Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
-        Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11
-    };
-
-    const year = 2025;
-
-    return {
-        start: new Date(year, monthMap[month], dayStart),
-        end: new Date(year, monthMap[month], dayEnd)
-    };
-}
-
-async function takeScreenshot(page, element, filename) {
-    const clip = await element.boundingBox();
-    if (!clip) {
-        throw new Error("Bounding box not found for screenshot.");
-    }
-    await page.screenshot({ path: filename, clip });
-}
-
-async function main() {
-    const browser = await puppeteer.launch({
-        headless: true,
-        args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-blink-features=AutomationControlled",
-            "--disable-dev-shm-usage",
-            "--disable-gpu"
-        ]
-    });
-
-    const page = await browser.newPage();
-
-    // Anti-bot headers
-    await page.setUserAgent(
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
-    );
-
-    await page.evaluateOnNewDocument(() => {
-        Object.defineProperty(navigator, "webdriver", {
-            get: () => false
-        });
-    });
-
-    await page.setViewport({ width: 1920, height: 1080 });
-
-    await page.goto(URL, {
-        waitUntil: "networkidle2",
-        timeout: 0
-    });
-
-    // Extra wait for scripts + styles
-    await page.waitForNetworkIdle({ timeout: 10000 });
-
-    const races = await getRaces(page);
-
-    const now = new Date();
-
-    const pastRaces = races.filter(r => r.dateEnd && r.dateEnd < now);
-    const nextRaces = races.filter(r => r.dateStart && r.dateStart > now);
-
-    const lastRace = pastRaces[pastRaces.length - 1];
-    const nextRace = nextRaces[0];
-
-    if (lastRace) {
-        const handle = await page.$(".f1-event-card:nth-of-type(" + (races.indexOf(lastRace)+1) + ")");
-        await handle.scrollIntoView();
-        await page.waitForTimeout(1000);
-
-        await takeScreenshot(page, handle, "f1_last_race.png");
-        console.log("Saved f1_last_race.png");
-    } else {
-        console.log("No past races found.");
+  const box = await page.evaluate((title, dateText) => {
+    function t(el, sel) {
+      const s = el.querySelector(sel);
+      return s ? s.innerText.trim() : '';
     }
 
-    if (nextRace) {
-        const handle = await page.$(".f1-event-card:nth-of-type(" + (races.indexOf(nextRace)+1) + ")");
-        await handle.scrollIntoView();
-        await page.waitForTimeout(1000);
+    const nodes = Array.from(document.querySelectorAll('a.group'));
+    for (const n of nodes) {
+      const titleText =
+        t(n,'p.typography-module_display-xl-bold__Gyl5W') ||
+        t(n,'p.typography-module_display-xl-bold__Gyl5W.group-hover\\:underline');
 
-        await takeScreenshot(page, handle, "f1_next_race.png");
-        console.log("Saved f1_next_race.png");
-    } else {
-        console.log("No next races found.");
+      const dateBig =
+        t(n,'span.typography-module_technical-m-bold__JDsxP') ||
+        t(n,'span.typography-module_technical-m-bold__JDsxP.typography-module_lg_technical-l-bold__d8tzL');
+
+      const dateSmall = t(n,'span.typography-module_technical-xs-regular__-W0Gs');
+
+      const candidates = [dateBig, dateSmall].filter(Boolean);
+      const matchTitle = titleText === title;
+      const matchDate = dateText && candidates.includes(dateText);
+
+      const nextLabel = Array.from(
+        n.querySelectorAll('span.typography-module_body-2-xs-bold__M03Ei')
+      ).some(x => x.innerText.trim() === 'NEXT RACE');
+
+      if ((matchTitle && matchDate) || (nextLabel && dateBig === dateText)) {
+        const r = n.getBoundingClientRect();
+        return { x: r.x, y: r.y, width: r.width, height: r.height, dpr: window.devicePixelRatio };
+      }
     }
+    return null;
+  }, match.title, match.dateText);
 
-    await browser.close();
+  return box;
 }
 
-main().catch(err => console.error(err));
+async function run() {
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-blink-features=AutomationControlled',
+      '--disable-dev-shm-usage',
+      '--disable-gpu'
+    ]
+  });
+
+  const page = await browser.newPage();
+
+  await page.setUserAgent(
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
+  );
+
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, 'webdriver', {
+      get: () => false,
+    });
+  });
+
+  await page.setViewport({ width: 1920, height: 1080 });
+
+  await page.goto(url, { waitUntil: 'networkidle2', timeout: 0 });
+  await page.waitForNetworkIdle({ timeout: 10000 });
+
+  await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+
+  await page.waitForSelector('a.group', { timeout: 30000 });
+  await setTimeout(800);
+
+  const html = await page.content();
+  const $ = cheerio.load(html);
+
+  const cards = [];
+
+  $('a.group').each((i, el) => {
+    const element = $(el);
+
+    const isNextRace = element.find('span.typography-module_body-2-xs-bold__M03Ei')
+      .filter((_, s) => $(s).text().trim() === 'NEXT RACE').length > 0;
+
+    const title = element.find('p.typography-module_display-xl-bold__Gyl5W').first().text().trim();
+
+    let dateText = '';
+    const future = element.find('span.typography-module_technical-m-bold__JDsxP.typography-module_lg_technical-l-bold__d8tzL').first();
+    const past = element.find('span.typography-module_technical-xs-regular__-W0Gs').first();
+
+    if (future.length) dateText = future.text().trim();
+    else if (past.length) dateText = past.text().trim();
+
+    if (!title && !dateText) return;
+
+    cards.push({
+      title,
+      dateText,
+      date: parseRaceDate(dateText),
+      isNextRace
+    });
+  });
+
+  const now = new Date();
+
+  const nextRace = cards.find(c => c.isNextRace)
+    || cards.filter(c => c.date >= now).sort((a,b)=>a.date - b.date)[0];
+
+  const lastRace = cards.filter(c => c.date < now).sort((a,b)=>b.date - a.date)[0];
+
+  console.log('Parsed cards:', cards.length);
+
+  async function makeScreenshot(race, file) {
+    if (!race) return;
+
+    for (let i = 1; i <= 3; i++) {
+      try {
+        const box = await findBoundingBoxForRace(page, race);
+        if (!box) throw new Error("Bounding box not found");
+
+        const clip = {
+          x: Math.floor(box.x * box.dpr),
+          y: Math.floor(box.y * box.dpr),
+          width: Math.floor(box.width * box.dpr),
+          height: Math.floor(box.height * box.dpr),
+        };
+
+        await page.screenshot({ path: file, clip });
+        console.log("Saved:", file);
+        return;
+      } catch (e) {
+        console.log(`Retry ${i} for ${file}:`, e.message);
+        await setTimeout(500 * i);
+      }
+    }
+
+    console.error("Failed:", file);
+  }
+
+  await makeScreenshot(nextRace, 'f1_next_race.png');
+  await makeScreenshot(lastRace, 'f1_last_race.png');
+
+  await browser.close();
+}
+
+run().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
+
+
+
+
