@@ -83,7 +83,7 @@ async function nukeCookieBanners(page) {
     setTimeout(removeCandidates, 2000);
   });
 
-  await new Promise(r => setTimeout(r, 2000));
+   await new Promise(resolve => setTimeout(resolve, 2000));
 }
 
 // ----------------------
@@ -235,4 +235,5 @@ run().catch(err => {
   console.error("Fatal error:", err);
   process.exit(1);
 });
+
 
