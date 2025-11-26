@@ -1,0 +1,31 @@
+name: Update F1 Images
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"   # запуск каждые 6 часов
+  workflow_dispatch:        # ручной запуск из интерфейса GitHub
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps
+        run: npm ci || npm install
+
+      - name: Run screenshot script
+        run: node screenshot.js
+
+      - name: Commit changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Auto-update F1 screenshots"
+          file_pattern: "*.png"
