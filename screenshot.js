@@ -78,17 +78,21 @@ async function nukeCookieBanners(page) {
 
     // Запускаем очистку несколько раз (баннеры появляются динамически)
     removeCandidates();
+    console.log("Remove 1. Waiting 500ms");
     setTimeout(500);
     removeCandidates();
+    console.log("Remove 2. Waiting 1000ms");
     setTimeout(1000);
     removeCandidates();
+    console.log("Remove 3. Waiting 2000ms");
     setTimeout(2000);
 //    setTimeout(removeCandidates, 500);
 //    setTimeout(removeCandidates, 1000);
 //    setTimeout(removeCandidates, 2000);
   });
 
-   await setTimeout(2000);
+  console.log("Exiting removal. Waiting 2000ms");
+  await setTimeout(2000);
 }
 
 // ----------------------
@@ -240,6 +244,7 @@ run().catch(err => {
   console.error("Fatal error:", err);
   process.exit(1);
 });
+
 
 
 
