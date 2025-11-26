@@ -83,6 +83,35 @@ async function run() {
   });
   // ----------------------------------------------------------------------
 
+
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-blink-features=AutomationControlled',
+      '--disable-dev-shm-usage',
+      '--disable-gpu'
+    ]
+  });
+
+  const page = await browser.newPage();
+
+  await page.setUserAgent(
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
+  );
+
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, 'webdriver', {
+      get: () => false,
+    });
+  });
+
+  await page.setViewport({ width: 1920, height: 1080 });
+
+  await page.goto(url, { waitUntil: 'networkidle2', timeout: 0 });
+  await page.waitForNetworkIdle({ timeout: 10000 });
+
   await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
   await page.waitForSelector('a.group', { timeout: 30000 });
@@ -164,4 +193,5 @@ run().catch(err => {
   console.error(err);
   process.exit(1);
 });
+
 
