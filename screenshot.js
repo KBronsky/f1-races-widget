@@ -59,9 +59,17 @@ async function findBoundingBoxForRace(page, match) {
 
 async function run() {
   const browser = await puppeteer.launch({
-    headless: true,
-    defaultViewport: { width: 1280, height: 900 },
-  });
+  headless: true,
+  args: [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage', 
+    '--disable-gpu',
+    '--disable-software-rasterizer',
+    '--disable-web-security'
+  ],
+  defaultViewport: { width: 1280, height: 900 },
+});
 
   const page = await browser.newPage();
 
@@ -156,3 +164,4 @@ run().catch(err => {
   console.error(err);
   process.exit(1);
 });
+
