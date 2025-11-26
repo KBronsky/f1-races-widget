@@ -59,32 +59,6 @@ async function findBoundingBoxForRace(page, match) {
 
 async function run() {
   const browser = await puppeteer.launch({
-  headless: true,
-  args: [
-    '--no-sandbox',
-    '--disable-setuid-sandbox',
-    '--disable-dev-shm-usage', 
-    '--disable-gpu',
-    '--disable-software-rasterizer',
-    '--disable-web-security'
-  ],
-  defaultViewport: { width: 1280, height: 900 },
-});
-
-  const page = await browser.newPage();
-
-  // ------------- предотвращаем redirect и ускоряем загрузку -------------
-  await page.setRequestInterception(true);
-  page.on('request', req => {
-    if (['image', 'stylesheet', 'media', 'font'].includes(req.resourceType()))
-      req.abort();
-    else
-      req.continue();
-  });
-  // ----------------------------------------------------------------------
-
-
-  const browser = await puppeteer.launch({
     headless: true,
     args: [
       '--no-sandbox',
@@ -108,6 +82,15 @@ async function run() {
   });
 
   await page.setViewport({ width: 1920, height: 1080 });
+  // ------------- предотвращаем redirect и ускоряем загрузку -------------
+  await page.setRequestInterception(true);
+  page.on('request', req => {
+    if (['image', 'stylesheet', 'media', 'font'].includes(req.resourceType()))
+      req.abort();
+    else
+      req.continue();
+  });
+  // ----------------------------------------------------------------------
 
   await page.goto(url, { waitUntil: 'networkidle2', timeout: 0 });
   await page.waitForNetworkIdle({ timeout: 10000 });
@@ -193,5 +176,6 @@ run().catch(err => {
   console.error(err);
   process.exit(1);
 });
+
 
 
