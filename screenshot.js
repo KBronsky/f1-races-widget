@@ -30,45 +30,60 @@ function parseRaceDate(dateText) {
 // ----------------------
 //   COOKIE BANNER KILLER
 // ----------------------
-async function handleCookieBanner(page) {
-  console.log("Checking for cookie banner...");
+async function nukeCookieBanners(page) {
+  console.log("Nuking cookie banners…");
 
-  const selectors = [
-    '#onetrust-accept-btn-handler',
-    'button[id^="onetrust-accept"]',
-    'button[aria-label*="Accept"]',
-    'button:contains("Accept")',
-    'button:contains("OK")'
-  ];
-
-  for (const sel of selectors) {
-    try {
-      const btn = await page.waitForSelector(sel, { timeout: 3000 });
-      if (btn) {
-        console.log(`Cookie banner detected: clicking ${sel}`);
-        await btn.click();
-
-        await setTimeout(1000);
-        return true;
-      }
-    } catch (e) {
-      // Not found — try next selector
-    }
-  }
-
-  // Emergency removal (if overlay blocks interaction)
   await page.evaluate(() => {
-    const ids = ["onetrust-banner-sdk", "ot-sdk-container", "cookie", "consent"];
-    ids.forEach(id => {
-      const el = document.getElementById(id);
-      if (el) el.remove();
-    });
-    const blocks = document.querySelectorAll('[class*="cookie"], [id*="cookie"], [class*="consent"], [id*="consent"]');
-    blocks.forEach(e => e.remove());
+    function removeCandidates() {
+      const keywords = ["cookie", "consent", "privacy", "agree", "manage"];
+      
+      // 1. Удаляем всё, что содержит ключевые слова в тексте
+      document.querySelectorAll("body *").forEach(el => {
+        try {
+          const text = (el.innerText || "").toLowerCase();
+          if (keywords.some(k => text.includes(k))) {
+            el.remove();
+          }
+        } catch {}
+      });
+
+      // 2. Удаляем по ID/классам
+      const selectors = [
+        '[id*="cookie"]',
+        '[class*="cookie"]',
+        '[id*="consent"]',
+        '[class*="consent"]',
+        '[id*="banner"]',
+        '[class*="banner"]',
+        '[id*="overlay"]',
+        '[class*="overlay"]',
+        '[id*="onetrust"]',
+        '[class*="onetrust"]',
+        '[id*="ot-"]',
+        '[class*="ot-"]'
+      ];
+      document.querySelectorAll(selectors.join(",")).forEach(el => el.remove());
+
+      // 3. Удаляем фиксированные элементы, перекрывающие экран
+      document.querySelectorAll("body *").forEach(el => {
+        const style = window.getComputedStyle(el);
+        if (
+          (style.position === "fixed" || style.position === "sticky") &&
+          parseInt(style.zIndex) > 9990
+        ) {
+          el.remove();
+        }
+      });
+    }
+
+    // Запускаем очистку несколько раз (баннеры появляются динамически)
+    removeCandidates();
+    setTimeout(removeCandidates, 500);
+    setTimeout(removeCandidates, 1000);
+    setTimeout(removeCandidates, 2000);
   });
 
-  console.log("Cookie banner not found or already accepted.");
-  return false;
+  await new Promise(r => setTimeout(r, 2000));
 }
 
 // ----------------------
@@ -106,7 +121,7 @@ async function run() {
   await setTimeout(1500);
 
   // -------------- HANDLE COOKIE BANNER --------------
-  await handleCookieBanner(page);
+  await nukeCookieBanners(page);
   await setTimeout(800);
 
   // Wait until race cards appear
@@ -207,7 +222,9 @@ async function run() {
     }
   }
 
+  await nukeCookieBanners(page);
   await screenshotCard(nextRace, "f1_next_race.png");
+  await nukeCookieBanners(page);
   await screenshotCard(lastRace, "f1_last_race.png");
 
   await browser.close();
@@ -218,3 +235,4 @@ run().catch(err => {
   console.error("Fatal error:", err);
   process.exit(1);
 });
+
