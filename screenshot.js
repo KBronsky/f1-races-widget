@@ -1,173 +1,179 @@
-import puppeteer from 'puppeteer';
-import * as cheerio from 'cheerio';
-import fs from 'fs';
+// screenshot.js — обновлённый и устойчивый вариант
+import puppeteer from "puppeteer";
+import * as cheerio from "cheerio";
 import { setTimeout } from "node:timers/promises";
 
 const URL = "https://www.formula1.com/en/racing/2025.html";
 
+// Парсит текст вроде "28 - 30 Nov" -> { start: Date, end: Date }
 function parseRaceDate(dateText) {
-  const parts = dateText.split(/\s+/).filter(Boolean);
-  const dayEnd = parseInt(parts[2], 10);
-  const monthStr = parts[3];
+  if (!dateText) return null;
+  // Убираем лишние пробелы
+  const tokens = dateText.trim().split(/\s+/);
+  // Возможные варианты: ["28","-","30","Nov"] или ["30","Nov","-","2","Dec"]
+  // Попробуем найти два числа и месяц справа (или два числа и месяц в конце)
+  const nums = tokens.filter(t => /^\d+$/.test(t)).map(Number);
+  const months = tokens.filter(t => /^[A-Za-z]{3,}$/.test(t));
+  if (nums.length === 0 || months.length === 0) return null;
+
+  // берем последний месяц-строку (например "Nov" или "December")
+  const monthStr = months[months.length - 1].slice(0, 3);
   const monthMap = { Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5, Jul:6, Aug:7, Sep:8, Oct:9, Nov:10, Dec:11 };
   const month = monthMap[monthStr] ?? 0;
-  return new Date(2025, month, dayEnd);
-}
 
-async function findBoundingBoxForRace(page, match) {
-  await page.waitForSelector('a.group', { timeout: 30000 });
+  // если есть два числа — первый = start, второй = end; если одно — оба равны ему
+  const startDay = nums[0];
+  const endDay = nums[1] ?? nums[0];
 
-  // стабилизатор DOM после рендера React
-  await setTimeout(600);
-
-  const box = await page.evaluate((title, dateText) => {
-    function t(el, sel) {
-      const s = el.querySelector(sel);
-      return s ? s.innerText.trim() : '';
-    }
-
-    const nodes = Array.from(document.querySelectorAll('a.group'));
-    for (const n of nodes) {
-      const titleText =
-        t(n,'p.typography-module_display-xl-bold__Gyl5W') ||
-        t(n,'p.typography-module_display-xl-bold__Gyl5W.group-hover\\:underline');
-
-      const dateBig =
-        t(n,'span.typography-module_technical-m-bold__JDsxP') ||
-        t(n,'span.typography-module_technical-m-bold__JDsxP.typography-module_lg_technical-l-bold__d8tzL');
-
-      const dateSmall = t(n,'span.typography-module_technical-xs-regular__-W0Gs');
-
-      const candidates = [dateBig, dateSmall].filter(Boolean);
-      const matchTitle = titleText === title;
-      const matchDate = dateText && candidates.includes(dateText);
-
-      const nextLabel = Array.from(
-        n.querySelectorAll('span.typography-module_body-2-xs-bold__M03Ei')
-      ).some(x => x.innerText.trim() === 'NEXT RACE');
-
-      if ((matchTitle && matchDate) || (nextLabel && dateBig === dateText)) {
-        const r = n.getBoundingClientRect();
-        return { x: r.x, y: r.y, width: r.width, height: r.height, dpr: window.devicePixelRatio };
-      }
-    }
-    return null;
-  }, match.title, match.dateText);
-
-  return box;
+  const year = 2025; // сезон 2025
+  const start = new Date(year, month, startDay);
+  const end = new Date(year, month, endDay);
+  return { start, end };
 }
 
 async function run() {
+  console.log("Start screenshot.js");
+
   const browser = await puppeteer.launch({
     headless: true,
     args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-blink-features=AutomationControlled',
-      '--disable-dev-shm-usage',
-      '--disable-gpu'
-    ]
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-blink-features=AutomationControlled",
+      "--disable-dev-shm-usage",
+      "--disable-gpu"
+    ],
+    defaultViewport: { width: 1920, height: 1080 }
   });
 
   const page = await browser.newPage();
 
-  await page.setUserAgent(
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
-  );
-
+  // Anti-headless tweaks
+  await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36");
   await page.evaluateOnNewDocument(() => {
-    Object.defineProperty(navigator, 'webdriver', {
-      get: () => false,
-    });
+    Object.defineProperty(navigator, "webdriver", { get: () => false });
   });
 
-  await page.setViewport({ width: 1920, height: 1080 });
+  // Навигация и ожидания
+  console.log("Go to page:", URL);
+  await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 0 });
 
-  await page.goto(url, { waitUntil: 'networkidle2', timeout: 0 });
-  await page.waitForNetworkIdle({ timeout: 10000 });
+  // Ждём, пока карточки появятся (React может рендерить позже)
+  try {
+    await page.waitForSelector("a.group", { timeout: 30000 });
+  } catch (e) {
+    console.error("a.group not found after wait:", e.message);
+  }
 
-  await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
-
-  await page.waitForSelector('a.group', { timeout: 30000 });
+  // Дадим дополнительное время для загрузки стилей и шрифтов
+  await setTimeout(1500);
+  // Убедимся, что network почти закончил: небольшой доп.ожидание
   await setTimeout(800);
 
+  // Получаем HTML и парсим через cheerio (статический снимок DOM в этот момент)
   const html = await page.content();
   const $ = cheerio.load(html);
 
   const cards = [];
+  // Перебираем реальные карточки как в DOM — это тот же селектор, который ты присылал
+  $("a.group").each((i, el) => {
+    const $el = $(el);
+    // Название — обычно <p class="typography-module_display-xl-bold__Gyl5W">Las Vegas</p>
+    const title = $el.find("p.typography-module_display-xl-bold__Gyl5W").first().text().trim()
+      || $el.find("p").first().text().trim();
 
-  $('a.group').each((i, el) => {
-    const element = $(el);
+    // Дата — два варианта: будущие (big) или прошедшие (xs)
+    const dateFuture = $el.find("span.typography-module_technical-m-bold__JDsxP, span.typography-module_technical-m-bold__JDsxP.typography-module_lg_technical-l-bold__d8tzL").first().text().trim();
+    const datePast = $el.find("span.typography-module_technical-xs-regular__-W0Gs").first().text().trim();
 
-    const isNextRace = element.find('span.typography-module_body-2-xs-bold__M03Ei')
-      .filter((_, s) => $(s).text().trim() === 'NEXT RACE').length > 0;
+    const dateText = dateFuture || datePast || "";
 
-    const title = element.find('p.typography-module_display-xl-bold__Gyl5W').first().text().trim();
+    const parsed = parseRaceDate(dateText);
 
-    let dateText = '';
-    const future = element.find('span.typography-module_technical-m-bold__JDsxP.typography-module_lg_technical-l-bold__d8tzL').first();
-    const past = element.find('span.typography-module_technical-xs-regular__-W0Gs').first();
-
-    if (future.length) dateText = future.text().trim();
-    else if (past.length) dateText = past.text().trim();
-
-    if (!title && !dateText) return;
+    // NEXT RACE метка (если есть)
+    const isNextRace = $el.find("span.typography-module_body-2-xs-bold__M03Ei").filter((_, s) => $(s).text().trim() === "NEXT RACE").length > 0;
 
     cards.push({
+      index: i,           // индекс в выборке page.$$()
       title,
       dateText,
-      date: parseRaceDate(dateText),
+      parsed,
       isNextRace
     });
   });
 
+  console.log(`Found ${cards.length} cards`);
+
+  if (cards.length === 0) {
+    console.error("No race cards found in cheerio parsing — page structure changed or blocked.");
+  } else {
+    // Вывод первых нескольких для отладки
+    cards.slice(0, 6).forEach((c, idx) => {
+      console.log(`#${idx} title="${c.title}" date="${c.dateText}" next=${c.isNextRace}`);
+    });
+  }
+
   const now = new Date();
 
-  const nextRace = cards.find(c => c.isNextRace)
-    || cards.filter(c => c.date >= now).sort((a,b)=>a.date - b.date)[0];
+  // Определяем last (последняя прошедшая) и next (следующая)
+  const past = cards.filter(c => c.parsed && c.parsed.end < now).sort((a,b)=>b.parsed.end - a.parsed.end);
+  const future = cards.filter(c => c.parsed && c.parsed.start >= now).sort((a,b)=>a.parsed.start - b.parsed.start);
 
-  const lastRace = cards.filter(c => c.date < now).sort((a,b)=>b.date - a.date)[0];
+  let lastRace = past.length ? past[0] : null;
+  let nextRace = cards.find(c => c.isNextRace) || (future.length ? future[0] : null);
 
-  console.log('Parsed cards:', cards.length);
+  console.log("Determined nextRace:", nextRace ? `${nextRace.title} ${nextRace.dateText}` : "NONE");
+  console.log("Determined lastRace:", lastRace ? `${lastRace.title} ${lastRace.dateText}` : "NONE");
 
-  async function makeScreenshot(race, file) {
-    if (!race) return;
+  // Получаем реальные element handles из браузера (в актуальном DOM)
+  const handles = await page.$$("a.group");
+  console.log("Found element handles:", handles.length);
 
-    for (let i = 1; i <= 3; i++) {
-      try {
-        const box = await findBoundingBoxForRace(page, race);
-        if (!box) throw new Error("Bounding box not found");
-
-        const clip = {
-          x: Math.floor(box.x * box.dpr),
-          y: Math.floor(box.y * box.dpr),
-          width: Math.floor(box.width * box.dpr),
-          height: Math.floor(box.height * box.dpr),
-        };
-
-        await page.screenshot({ path: file, clip });
-        console.log("Saved:", file);
+  async function screenshotByCard(card, filename) {
+    if (!card) {
+      console.log(`No card provided for ${filename}`);
+      return;
+    }
+    const idx = card.index;
+    const handle = handles[idx];
+    if (!handle) {
+      // На всякий случай пробуем поиск по содержимому title внутри браузера
+      console.warn(`Handle for index ${idx} not found; trying fallback search by title.`);
+      const fallback = await page.$x(`//a[contains(., "${card.title.replace(/"/g,'')}" )]`);
+      if (fallback && fallback[0]) {
+        await fallback[0].screenshot({ path: filename });
+        console.log(`Saved (fallback) ${filename}`);
         return;
-      } catch (e) {
-        console.log(`Retry ${i} for ${file}:`, e.message);
-        await setTimeout(500 * i);
+      } else {
+        console.error("Fallback also failed — cannot find element handle.");
+        return;
       }
     }
 
-    console.error("Failed:", file);
+    // Скроллим к элементу и ждём стабильности
+    try {
+      await handle.evaluate(el => el.scrollIntoView({behavior: "auto", block: "center", inline: "center"}));
+    } catch (e) { /* ignore */ }
+    await setTimeout(800);
+
+    // Делаем скриншот напрямую через elementHandle.screenshot()
+    try {
+      await handle.screenshot({ path: filename });
+      console.log(`Saved ${filename}`);
+    } catch (err) {
+      console.error(`Screenshot error for ${filename}:`, err.message);
+    }
   }
 
-  await makeScreenshot(nextRace, 'f1_next_race.png');
-  await makeScreenshot(lastRace, 'f1_last_race.png');
+  // Делаем скриншоты
+  await screenshotByCard(nextRace, "f1_next_race.png");
+  await screenshotByCard(lastRace, "f1_last_race.png");
 
   await browser.close();
+  console.log("Done.");
 }
 
 run().catch(err => {
-  console.error(err);
+  console.error("Unhandled error:", err);
   process.exit(1);
 });
-
-
-
-
