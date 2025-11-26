@@ -125,7 +125,7 @@ async function run() {
   await setTimeout(800);
 
   // Wait until race cards appear
-  await page.waitForSelector("a.group", { timeout: 30000 });
+  await page.waitForSelector("a.group", { timeout: 60000 });
   await setTimeout(800);
 
   // Parse HTML snapshot
@@ -235,6 +235,7 @@ run().catch(err => {
   console.error("Fatal error:", err);
   process.exit(1);
 });
+
 
 
 
