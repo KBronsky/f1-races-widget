@@ -27,73 +27,6 @@ function parseRaceDate(dateText) {
   return { start, end };
 }
 
-// ----------------------
-//   COOKIE BANNER KILLER
-// ----------------------
-async function nukeCookieBanners(page) {
-  console.log("Nuking cookie banners…");
-
-  await page.evaluate(() => {
-    function removeCandidates() {
-      const keywords = ["cookie", "consent", "privacy", "agree", "manage"];
-      
-      // 1. Удаляем всё, что содержит ключевые слова в тексте
-      document.querySelectorAll("body *").forEach(el => {
-        try {
-          const text = (el.innerText || "").toLowerCase();
-          if (keywords.some(k => text.includes(k))) {
-            el.remove();
-          }
-        } catch {}
-      });
-
-      // 2. Удаляем по ID/классам
-      const selectors = [
-        '[id*="cookie"]',
-        '[class*="cookie"]',
-        '[id*="consent"]',
-        '[class*="consent"]',
-        '[id*="banner"]',
-        '[class*="banner"]',
-        '[id*="overlay"]',
-        '[class*="overlay"]',
-        '[id*="onetrust"]',
-        '[class*="onetrust"]',
-        '[id*="ot-"]',
-        '[class*="ot-"]'
-      ];
-      document.querySelectorAll(selectors.join(",")).forEach(el => el.remove());
-
-      // 3. Удаляем фиксированные элементы, перекрывающие экран
-      document.querySelectorAll("body *").forEach(el => {
-        const style = window.getComputedStyle(el);
-        if (
-          (style.position === "fixed" || style.position === "sticky") &&
-          parseInt(style.zIndex) > 9990
-        ) {
-          el.remove();
-        }
-      });
-    }
-
-    // Запускаем очистку несколько раз (баннеры появляются динамически)
-    removeCandidates();
-    console.log("Remove 1. Waiting 500ms");
-    setTimeout(500);
-    removeCandidates();
-    console.log("Remove 2. Waiting 1000ms");
-    setTimeout(1000);
-    removeCandidates();
-    console.log("Remove 3. Waiting 2000ms");
-    setTimeout(2000);
-//    setTimeout(removeCandidates, 500);
-//    setTimeout(removeCandidates, 1000);
-//    setTimeout(removeCandidates, 2000);
-  });
-
-  console.log("Exiting removal. Waiting 2000ms");
-  await setTimeout(2000);
-}
 
 // ----------------------
 //   MAIN LOGIC
@@ -128,7 +61,73 @@ async function run() {
 
   // Wait extra to ensure React content rendered
   await setTimeout(1500);
+  // ----------------------
+  //   COOKIE BANNER KILLER
+  // ----------------------
+  async function nukeCookieBanners(page) {
+    console.log("Nuking cookie banners…");
 
+    await page.evaluate(() => {
+      function removeCandidates() {
+        const keywords = ["cookie", "consent", "privacy", "agree", "manage"];
+      
+        // 1. Удаляем всё, что содержит ключевые слова в тексте
+        document.querySelectorAll("body *").forEach(el => {
+          try {
+            const text = (el.innerText || "").toLowerCase();
+            if (keywords.some(k => text.includes(k))) {
+              el.remove();
+            }
+          } catch {}
+        });
+
+        // 2. Удаляем по ID/классам
+        const selectors = [
+          '[id*="cookie"]',
+          '[class*="cookie"]',
+          '[id*="consent"]',
+          '[class*="consent"]',
+          '[id*="banner"]',
+          '[class*="banner"]',
+          '[id*="overlay"]',
+          '[class*="overlay"]',
+          '[id*="onetrust"]',
+          '[class*="onetrust"]',
+          '[id*="ot-"]',
+          '[class*="ot-"]'
+        ];
+        document.querySelectorAll(selectors.join(",")).forEach(el => el.remove());
+
+        // 3. Удаляем фиксированные элементы, перекрывающие экран
+        document.querySelectorAll("body *").forEach(el => {
+          const style = window.getComputedStyle(el);
+          if (
+            (style.position === "fixed" || style.position === "sticky") &&
+            parseInt(style.zIndex) > 9990
+          ) {
+            el.remove();
+          }
+        });
+      }
+
+      // Запускаем очистку несколько раз (баннеры появляются динамически)
+      removeCandidates();
+      console.log("Remove 1. Waiting 500ms");
+      setTimeout(500);
+      removeCandidates();
+      console.log("Remove 2. Waiting 1000ms");
+      setTimeout(1000);
+      removeCandidates();
+      console.log("Remove 3. Waiting 2000ms");
+      setTimeout(2000);
+  //    setTimeout(removeCandidates, 500);
+  //    setTimeout(removeCandidates, 1000);
+  //    setTimeout(removeCandidates, 2000);
+    });
+
+    console.log("Exiting removal. Waiting 2000ms");
+    await setTimeout(2000);
+  }
   // -------------- HANDLE COOKIE BANNER --------------
   await nukeCookieBanners(page);
   await setTimeout(800);
@@ -244,6 +243,7 @@ run().catch(err => {
   console.error("Fatal error:", err);
   process.exit(1);
 });
+
 
 
 
