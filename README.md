@@ -1,4 +1,4 @@
-# f1-races-widget
+# f1-races-widget (still in dev)
 Made for personal use, but free to use, if, in any case, you have found this.
 Basically, this makes 2 pictures from F1 website with static links. One picture with latest race results, and other - next race small prewiew. 
 
