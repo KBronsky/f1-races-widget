@@ -2,6 +2,8 @@
 import puppeteer from "puppeteer";
 import * as cheerio from "cheerio";
 import { setTimeout as delay } from "node:timers/promises";
+import fs from "fs";
+
 
 const URL = "https://www.formula1.com/en/racing/2025.html";
 
@@ -256,6 +258,8 @@ async function run() {
 
   // Берём snapshot HTML и парсим cheerio
   const html = await page.content();
+  fs.writeFileSync("debug.html", html);
+  console.log("Saved debug.html");
   const $ = cheerio.load(html);
 
   const cards = [];
