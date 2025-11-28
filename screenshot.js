@@ -1,7 +1,7 @@
 // screenshot.js — обновлённый и устойчивый вариант
 import puppeteer from "puppeteer";
 import * as cheerio from "cheerio";
-import { setTimeout as delay } from "node:timers/promises";
+import { setTimeout } from "node:timers/promises";
 
 const URL = "https://www.formula1.com/en/racing/2025.html";
 
@@ -70,7 +70,7 @@ async function nukeCookieBanners(page) {
     setTimeout(removeCandidates, 3000);
   });
 
-  await delay(2000);
+  await setTimeout(2000);
 }
 
 // Парсит текст вроде "28 - 30 Nov" -> { start: Date, end: Date }
@@ -246,4 +246,5 @@ run().catch(err => {
   console.error("Unhandled error:", err);
   process.exit(1);
 });
+
 
