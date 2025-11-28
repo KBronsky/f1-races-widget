@@ -198,53 +198,52 @@ async function run() {
   console.log("Found element handles:", handles.length);
 
   async function screenshotByCard(page, card, filename) {
-  if (!card) {
-    console.log(`No card to screenshot for ${filename}`);
-    return;
-  }
-
-  console.log(`Screenshot: ${card.title} -> ${filename}`);
-
-  // Ищем элемент каждый раз заново
-  const xpath = `//a[contains(@class, "group") and .//*[contains(text(), "${card.title}")]]`;
-
-  let el = null;
-
-  try {
-    const handles = await page.$x(xpath);
-
-    if (!handles || !handles.length) {
-      console.error("Could not locate card via XPath:", card.title);
+      if (!card) {
+      console.log(`No card to screenshot for ${filename}`);
       return;
-    }
+      }
+      console.log(`Screenshot: ${card.title} -> ${filename}`);
 
-    el = handles[0];
-  } catch (err) {
-    console.error("XPath error:", err.message);
-    return;
-  }
+      // Ищем элемент каждый раз заново
+      const xpath = `//a[contains(@class, "group") and .//*[contains(text(), "${card.title}")]]`;
 
-  // Скроллим
-  try {
-    await el.evaluate(el => el.scrollIntoView({ behavior: "auto", block: "center" }));
-  } catch {}
+      let el = null;
 
-  await setTimeout(700);
+      try {
+      const handles = await page.$x(xpath);
 
-  // Скриншот
-  try {
-    await el.screenshot({ path: filename });
-    console.log("Saved:", filename);
-  } catch (err) {
-    console.error(`Screenshot failed for ${filename}:`, err.message);
-  }
-}
+      if (!handles || !handles.length) {
+         console.error("Could not locate card via XPath:", card.title);
+         return;
+         }
+
+      el = handles[0];
+      } catch (err) {
+         console.error("XPath error:", err.message);
+         return;
+         }
+
+      // Скроллим
+      try {
+         await el.evaluate(el => el.scrollIntoView({ behavior: "auto", block: "center" }));   
+         } catch {}
+
+      await setTimeout(700);
+
+      // Скриншот
+      try {
+         await el.screenshot({ path: filename });
+         console.log("Saved:", filename);
+         } catch (err) {
+            console.error(`Screenshot failed for ${filename}:`, err.message);
+            }
+   }
 
 
-  // Делаем скриншоты
-  await nukeCookieBanners(page);
-  await screenshotByCard(nextRace, "f1_next_race.png");
-  await screenshotByCard(lastRace, "f1_last_race.png");
+   // Делаем скриншоты
+   await nukeCookieBanners(page);
+   await screenshotByCard(page, nextRace, "f1_next_race.png");
+   await screenshotByCard(page, lastRace, "f1_last_race.png");
 
   await browser.close();
   console.log("Done.");
@@ -254,6 +253,7 @@ run().catch(err => {
   console.error("Unhandled error:", err);
   process.exit(1);
 });
+
 
 
 
