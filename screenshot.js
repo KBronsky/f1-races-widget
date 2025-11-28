@@ -197,41 +197,49 @@ async function run() {
   const handles = await page.$$("a.group");
   console.log("Found element handles:", handles.length);
 
-  async function screenshotByCard(card, filename) {
-    if (!card) {
-      console.log(`No card provided for ${filename}`);
+  async function screenshotByCard(page, card, filename) {
+  if (!card) {
+    console.log(`No card to screenshot for ${filename}`);
+    return;
+  }
+
+  console.log(`Screenshot: ${card.title} -> ${filename}`);
+
+  // Ищем элемент каждый раз заново
+  const xpath = `//a[contains(@class, "group") and .//*[contains(text(), "${card.title}")]]`;
+
+  let el = null;
+
+  try {
+    const handles = await page.$x(xpath);
+
+    if (!handles || !handles.length) {
+      console.error("Could not locate card via XPath:", card.title);
       return;
     }
-    const idx = card.index;
-    const handle = handles[idx];
-    if (!handle) {
-      // На всякий случай пробуем поиск по содержимому title внутри браузера
-      console.warn(`Handle for index ${idx} not found; trying fallback search by title.`);
-      const fallback = await page.$x(`//a[contains(., "${card.title.replace(/"/g,'')}" )]`);
-      if (fallback && fallback[0]) {
-        await fallback[0].screenshot({ path: filename });
-        console.log(`Saved (fallback) ${filename}`);
-        return;
-      } else {
-        console.error("Fallback also failed — cannot find element handle.");
-        return;
-      }
-    }
 
-    // Скроллим к элементу и ждём стабильности
-    try {
-      await handle.evaluate(el => el.scrollIntoView({behavior: "auto", block: "center", inline: "center"}));
-    } catch (e) { /* ignore */ }
-    await setTimeout(800);
-
-    // Делаем скриншот напрямую через elementHandle.screenshot()
-    try {
-      await handle.screenshot({ path: filename });
-      console.log(`Saved ${filename}`);
-    } catch (err) {
-      console.error(`Screenshot error for ${filename}:`, err.message);
-    }
+    el = handles[0];
+  } catch (err) {
+    console.error("XPath error:", err.message);
+    return;
   }
+
+  // Скроллим
+  try {
+    await el.evaluate(el => el.scrollIntoView({ behavior: "auto", block: "center" }));
+  } catch {}
+
+  await setTimeout(700);
+
+  // Скриншот
+  try {
+    await el.screenshot({ path: filename });
+    console.log("Saved:", filename);
+  } catch (err) {
+    console.error(`Screenshot failed for ${filename}:`, err.message);
+  }
+}
+
 
   // Делаем скриншоты
   await nukeCookieBanners(page);
@@ -246,5 +254,6 @@ run().catch(err => {
   console.error("Unhandled error:", err);
   process.exit(1);
 });
+
 
 
