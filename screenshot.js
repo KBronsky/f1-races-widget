@@ -1,7 +1,7 @@
 // screenshot.js — обновлённый и устойчивый вариант
 import puppeteer from "puppeteer";
 import * as cheerio from "cheerio";
-import { setTimeout } from "node:timers/promises";
+import { setTimeout as delay } from "node:timers/promises";
 
 const URL = "https://www.formula1.com/en/racing/2025.html";
 
@@ -246,3 +246,4 @@ run().catch(err => {
   console.error("Unhandled error:", err);
   process.exit(1);
 });
+
