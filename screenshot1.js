@@ -1,179 +1,195 @@
-// screenshot.js — обновлённый и устойчивый вариант
+// screenshot.js — стабильный вариант для GitHub Actions + Puppeteer
 import puppeteer from "puppeteer";
 import * as cheerio from "cheerio";
+import fs from "fs";
 import { setTimeout } from "node:timers/promises";
 
 const URL = "https://www.formula1.com/en/racing/2025.html";
 
-// Парсит текст вроде "28 - 30 Nov" -> { start: Date, end: Date }
-function parseRaceDate(dateText) {
-  if (!dateText) return null;
-  // Убираем лишние пробелы
-  const tokens = dateText.trim().split(/\s+/);
-  // Возможные варианты: ["28","-","30","Nov"] или ["30","Nov","-","2","Dec"]
-  // Попробуем найти два числа и месяц справа (или два числа и месяц в конце)
+/* ----------------------------------------------------------
+   Парсинг даты формата: "28 - 30 Nov"
+---------------------------------------------------------- */
+function parseRaceDate(text) {
+  if (!text) return null;
+  const tokens = text.trim().split(/\s+/);
+
   const nums = tokens.filter(t => /^\d+$/.test(t)).map(Number);
   const months = tokens.filter(t => /^[A-Za-z]{3,}$/.test(t));
+
   if (nums.length === 0 || months.length === 0) return null;
 
-  // берем последний месяц-строку (например "Nov" или "December")
   const monthStr = months[months.length - 1].slice(0, 3);
-  const monthMap = { Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5, Jul:6, Aug:7, Sep:8, Oct:9, Nov:10, Dec:11 };
+  const monthMap = {
+    Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5,
+    Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11
+  };
   const month = monthMap[monthStr] ?? 0;
 
-  // если есть два числа — первый = start, второй = end; если одно — оба равны ему
   const startDay = nums[0];
   const endDay = nums[1] ?? nums[0];
 
-  const year = 2025; // сезон 2025
-  const start = new Date(year, month, startDay);
-  const end = new Date(year, month, endDay);
-  return { start, end };
+  const year = 2025;
+
+  return {
+    start: new Date(year, month, startDay),
+    end: new Date(year, month, endDay)
+  };
 }
 
+/* ----------------------------------------------------------
+   Точное удаление cookie-баннера SourcePoint
+---------------------------------------------------------- */
+async function removeCookieBanner(page) {
+  console.log("Trying to remove cookie banner…");
+
+  try {
+    await page.evaluate(() => {
+      const div = [...document.querySelectorAll("div[id^='sp_message_container_']")];
+      div.forEach(el => el.remove());
+    });
+  } catch (e) {
+    console.log("Cookie banner removal failed:", e.message);
+  }
+
+  await setTimeout(500);
+}
+
+/* ----------------------------------------------------------
+   Основная логика
+---------------------------------------------------------- */
 async function run() {
-  console.log("Start screenshot.js");
+  console.log("Launching browser…");
 
   const browser = await puppeteer.launch({
     headless: true,
     args: [
       "--no-sandbox",
       "--disable-setuid-sandbox",
-      "--disable-blink-features=AutomationControlled",
-      "--disable-dev-shm-usage",
-      "--disable-gpu"
+      "--disable-dev-shm-usage"
     ],
     defaultViewport: { width: 1920, height: 1080 }
   });
 
   const page = await browser.newPage();
+  await page.setUserAgent(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36"
+  );
 
-  // Anti-headless tweaks
-  await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36");
-  await page.evaluateOnNewDocument(() => {
-    Object.defineProperty(navigator, "webdriver", { get: () => false });
-  });
+  console.log("Opening:", URL);
+  await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 60000 });
 
-  // Навигация и ожидания
-  console.log("Go to page:", URL);
-  await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 0 });
+  // Дожидаемся появления карточек (React SPA)
+  let cardsFound = false;
+  for (let i = 0; i < 10; i++) {
+    const html = await page.content();
+    const $ = cheerio.load(html);
+    const cards = $("a.group").length;
 
-  // Ждём, пока карточки появятся (React может рендерить позже)
-  try {
-    await page.waitForSelector("a.group", { timeout: 30000 });
-  } catch (e) {
-    console.error("a.group not found after wait:", e.message);
+    if (cards > 0) {
+      cardsFound = true;
+      break;
+    }
+
+    await setTimeout(1000);
   }
 
-  // Дадим дополнительное время для загрузки стилей и шрифтов
-  await setTimeout(1500);
-  // Убедимся, что network почти закончил: небольшой доп.ожидание
+  if (!cardsFound) {
+    console.error("ERROR: race cards did not load.");
+    await browser.close();
+    process.exit(1);
+  }
+
+  // Удаляем баннер
+  await removeCookieBanner(page);
+
+  // Даем странице перестроиться
   await setTimeout(800);
 
-  // Получаем HTML и парсим через cheerio (статический снимок DOM в этот момент)
+  // Снова забираем HTML после удаления баннера
   const html = await page.content();
   const $ = cheerio.load(html);
 
   const cards = [];
-  // Перебираем реальные карточки как в DOM — это тот же селектор, который ты присылал
-  $("a.group").each((i, el) => {
+  $("a.group").each((index, el) => {
     const $el = $(el);
-    // Название — обычно <p class="typography-module_display-xl-bold__Gyl5W">Las Vegas</p>
-    const title = $el.find("p.typography-module_display-xl-bold__Gyl5W").first().text().trim()
-      || $el.find("p").first().text().trim();
 
-    // Дата — два варианта: будущие (big) или прошедшие (xs)
-    const dateFuture = $el.find("span.typography-module_technical-m-bold__JDsxP, span.typography-module_technical-m-bold__JDsxP.typography-module_lg_technical-l-bold__d8tzL").first().text().trim();
-    const datePast = $el.find("span.typography-module_technical-xs-regular__-W0Gs").first().text().trim();
+    const title =
+      $el.find("p.typography-module_display-xl-bold__Gyl5W").first().text().trim() ||
+      $el.find("p").first().text().trim();
 
-    const dateText = dateFuture || datePast || "";
+    const dateText =
+      $el
+        .find(
+          "span.typography-module_technical-m-bold__JDsxP, span.typography-module_technical-m-bold__JDsxP.typography-module_lg_technical-l-bold__d8tzL"
+        )
+        .first()
+        .text()
+        .trim() ||
+      $el.find("span.typography-module_technical-xs-regular__-W0Gs").first().text().trim();
 
     const parsed = parseRaceDate(dateText);
 
-    // NEXT RACE метка (если есть)
-    const isNextRace = $el.find("span.typography-module_body-2-xs-bold__M03Ei").filter((_, s) => $(s).text().trim() === "NEXT RACE").length > 0;
-
-    cards.push({
-      index: i,           // индекс в выборке page.$$()
-      title,
-      dateText,
-      parsed,
-      isNextRace
-    });
+    if (parsed) {
+      cards.push({
+        index,
+        title,
+        dateText,
+        parsed
+      });
+    }
   });
 
-  console.log(`Found ${cards.length} cards`);
+  console.log(`Parsed ${cards.length} race cards.`);
 
-  if (cards.length === 0) {
-    console.error("No race cards found in cheerio parsing — page structure changed or blocked.");
-  } else {
-    // Вывод первых нескольких для отладки
-    cards.slice(0, 6).forEach((c, idx) => {
-      console.log(`#${idx} title="${c.title}" date="${c.dateText}" next=${c.isNextRace}`);
-    });
-  }
-
+  // ------------------------
+  // Логика выбора гонок
+  // ------------------------
   const now = new Date();
 
-  // Определяем last (последняя прошедшая) и next (следующая)
-  const past = cards.filter(c => c.parsed && c.parsed.end < now).sort((a,b)=>b.parsed.end - a.parsed.end);
-  const future = cards.filter(c => c.parsed && c.parsed.start >= now).sort((a,b)=>a.parsed.start - b.parsed.start);
+  const future = cards.filter(c => now <= c.parsed.end).sort((a, b) => a.parsed.start - b.parsed.start);
+  const past = cards.filter(c => now > c.parsed.end).sort((a, b) => b.parsed.end - a.parsed.end);
 
-  let lastRace = past.length ? past[0] : null;
-  let nextRace = cards.find(c => c.isNextRace) || (future.length ? future[0] : null);
+  const nextRace = future[0] || null;
+  const lastRace = past[0] || null;
 
-  console.log("Determined nextRace:", nextRace ? `${nextRace.title} ${nextRace.dateText}` : "NONE");
-  console.log("Determined lastRace:", lastRace ? `${lastRace.title} ${lastRace.dateText}` : "NONE");
+  console.log("Next race:", nextRace ? `${nextRace.title} (${nextRace.dateText})` : "NONE");
+  console.log("Last race:", lastRace ? `${lastRace.title} (${lastRace.dateText})` : "NONE");
 
-  // Получаем реальные element handles из браузера (в актуальном DOM)
   const handles = await page.$$("a.group");
-  console.log("Found element handles:", handles.length);
 
-  async function screenshotByCard(card, filename) {
+  async function screenshotCard(card, output) {
     if (!card) {
-      console.log(`No card provided for ${filename}`);
+      console.log(`No card for ${output}`);
       return;
     }
-    const idx = card.index;
-    const handle = handles[idx];
+
+    const handle = handles[card.index];
     if (!handle) {
-      // На всякий случай пробуем поиск по содержимому title внутри браузера
-      console.warn(`Handle for index ${idx} not found; trying fallback search by title.`);
-      const fallback = await page.$x(`//a[contains(., "${card.title.replace(/"/g,'')}" )]`);
-      if (fallback && fallback[0]) {
-        await fallback[0].screenshot({ path: filename });
-        console.log(`Saved (fallback) ${filename}`);
-        return;
-      } else {
-        console.error("Fallback also failed — cannot find element handle.");
-        return;
-      }
+      console.log(`Handle not found for ${card.title}`);
+      return;
     }
 
-    // Скроллим к элементу и ждём стабильности
     try {
-      await handle.evaluate(el => el.scrollIntoView({behavior: "auto", block: "center", inline: "center"}));
-    } catch (e) { /* ignore */ }
-    await setTimeout(800);
+      await handle.evaluate(el =>
+        el.scrollIntoView({ behavior: "auto", block: "center", inline: "center" })
+      );
+      await setTimeout(600);
 
-    // Делаем скриншот напрямую через elementHandle.screenshot()
-    try {
-      await handle.screenshot({ path: filename });
-      console.log(`Saved ${filename}`);
+      await handle.screenshot({ path: output });
+      console.log("Saved:", output);
     } catch (err) {
-      console.error(`Screenshot error for ${filename}:`, err.message);
+      console.log("Screenshot error:", err);
     }
   }
 
-  // Делаем скриншоты
-  await screenshotByCard(nextRace, "f1_next_race.png");
-  await screenshotByCard(lastRace, "f1_last_race.png");
+  await screenshotCard(nextRace, "f1_next_race.png");
+  await screenshotCard(lastRace, "f1_last_race.png");
 
   await browser.close();
   console.log("Done.");
 }
 
 run().catch(err => {
-  console.error("Unhandled error:", err);
+  console.error("Fatal:", err);
   process.exit(1);
 });
