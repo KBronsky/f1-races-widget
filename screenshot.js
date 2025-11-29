@@ -130,6 +130,15 @@ async function run() {
   await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36");
   await page.evaluateOnNewDocument(() => { Object.defineProperty(navigator, "webdriver", { get: () => false }); });
 
+  // Устанавливаем тему сайта через localStorage до загрузки
+  const THEME = process.env.F1_THEME || "dark";  // либо "light"
+  await page.goto("about:blank");
+  await page.evaluate(theme => {
+    try {
+      sessionStorage.setItem("dark-mode", theme);
+    } catch (e) {}
+  }, THEME);
+   
   console.log("Go to:", URL);
   await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 60000 });
 
