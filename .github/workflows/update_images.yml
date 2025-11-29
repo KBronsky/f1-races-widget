@@ -19,7 +19,7 @@ jobs:
           node-version: 20
 
       - name: Install deps
-        run: npm ci || npm install
+        run: npm ci || npm install || npm install sharp
 
       - name: Run screenshot script
         run: node screenshot.js
