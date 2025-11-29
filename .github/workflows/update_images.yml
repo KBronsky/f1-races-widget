@@ -47,7 +47,8 @@ jobs:
           
   notify_telegram_on_failure:
     runs-on: ubuntu-latest
-    if: failure()  # ← ВАЖНО: шаг выполняется только если workflow упал
+    needs: update
+    if: ${{ needs.update.result == 'failure' }}
     steps:
       - name: Send Telegram alert
         run: |
