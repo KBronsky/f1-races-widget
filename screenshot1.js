@@ -89,9 +89,6 @@ async function run() {
       cardsFound = true;
       break;
     }
-    console.log("Saving debug files…");
-    fs.writeFileSync("debug.html", await page.content());
-    await page.screenshot({ path: "debug.png", fullPage: true });
 
     await setTimeout(1000);
   }
@@ -143,6 +140,9 @@ async function run() {
   });
 
   console.log(`Parsed ${cards.length} race cards.`);
+  console.log("Saving debug files…");
+  fs.writeFileSync("debug.html", await page.content());
+  await page.screenshot({ path: "debug.png", fullPage: true });
 
   // ------------------------
   // Логика выбора гонок
