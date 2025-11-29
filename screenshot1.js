@@ -89,6 +89,9 @@ async function run() {
       cardsFound = true;
       break;
     }
+    console.log("Saving debug files…");
+    fs.writeFileSync("debug.html", await page.content());
+    await page.screenshot({ path: "debug.png", fullPage: true });
 
     await setTimeout(1000);
   }
