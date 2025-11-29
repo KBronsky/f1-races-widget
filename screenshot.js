@@ -1,49 +1,42 @@
-// screenshot.js — версия с кликом по кнопке "Accept all" внутри iframe (consent.formula1.com)
+// screenshot.js
+// Saves 6 images:
+// f1_last_race_wt.png, f1_next_race_wt.png,
+// f1_last_race_bk.png, f1_next_race_bk.png,
+// f1_racewidget_wt.png (composite), f1_racewidget_bk.png (composite)
+
 import puppeteer from "puppeteer";
 import * as cheerio from "cheerio";
 import fs from "fs";
-import { setTimeout } from "node:timers/promises";
+import { setTimeout as delay } from "node:timers/promises";
 
 const URL = "https://www.formula1.com/en/racing/2025.html";
 
-/* ----------------------------------------------------------
-   Парсинг даты формата: "28 - 30 Nov"
----------------------------------------------------------- */
+/* ---------- date parser ---------- */
 function parseRaceDate(text) {
   if (!text) return null;
-  const tokens = text.trim().split(/\s+/);
-  const nums = tokens.filter(t => /^\d+$/.test(t)).map(Number);
-  const months = tokens.filter(t => /^[A-Za-z]{3,}$/.test(t));
-  if (nums.length === 0 || months.length === 0) return null;
-  const monthStr = months[months.length - 1].slice(0, 3);
+  const nums = text.match(/\d+/g)?.map(Number) ?? [];
+  const monthMatch = text.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b/i);
+  if (!nums.length || !monthMatch) return null;
   const monthMap = { Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5, Jul:6, Aug:7, Sep:8, Oct:9, Nov:10, Dec:11 };
-  const month = monthMap[monthStr] ?? 0;
-  const startDay = nums[0];
-  const endDay = nums[1] ?? nums[0];
+  const month = monthMap[monthMatch[0].slice(0,3)];
   const year = 2025;
-  return { start: new Date(year, month, startDay), end: new Date(year, month, endDay) };
+  const start = new Date(year, month, nums[0]);
+  const end = new Date(year, month, nums[1] ?? nums[0]);
+  if (end < start) end.setFullYear(end.getFullYear() + 1);
+  return { start, end };
 }
 
+/* ---------- consent iframe handling (click Accept) ---------- */
 async function clickAcceptInConsentFrame(page) {
-  // ищем фрейм consent (consent.formula1.com)
   const frames = page.frames();
   let consentFrame = frames.find(f => {
-    try {
-      return f.url().includes("consent.formula1.com");
-    } catch (e) {
-      return false;
-    }
+    try { return f.url().includes("consent.formula1.com"); } catch { return false; }
   });
 
   if (!consentFrame) {
-    // Возможно iframe ещё не добавлен — попробуем найти по id элемента-iframe в DOM
     const iframeHandle = await page.$("iframe[id^='sp_message_iframe_']");
     if (iframeHandle) {
-      try {
-        consentFrame = await iframeHandle.contentFrame();
-      } catch (e) {
-        consentFrame = null;
-      }
+      consentFrame = await iframeHandle.contentFrame().catch(()=>null);
     }
   }
 
@@ -52,51 +45,41 @@ async function clickAcceptInConsentFrame(page) {
     return false;
   }
 
-  console.log("Consent iframe found, URL:", consentFrame.url());
-
-  // Попытки нажать кнопку по разным селекторам / вариантах текста
+  // try multiple selectors/xpaths
   const selectors = [
     'button[aria-label="Accept all"]',
     'button[title="Accept all"]',
-    'button:has-text("Accept all")' // puppeteer указывает не поддерживает :has-text — но оставим для попытки
+    'button[aria-label="Accept"]',
+    'button[title="Accept"]'
   ];
 
-  // Также будем использовать XPath внутри фрейма как fallback (по тексту)
-  try {
-    for (const sel of selectors) {
-      try {
-        const btn = await consentFrame.waitForSelector(sel, { timeout: 3000 });
-        if (btn) {
-          await btn.click();
-          console.log("Clicked accept button via selector:", sel);
-          return true;
-        }
-      } catch (e) {
-        // селектор не найден — пробуем дальше
+  for (const sel of selectors) {
+    try {
+      const btn = await consentFrame.waitForSelector(sel, { timeout: 2500 });
+      if (btn) {
+        await btn.click().catch(()=>null);
+        console.log("Clicked accept button via selector:", sel);
+        return true;
       }
-    }
+    } catch {}
+  }
 
-    // XPath fallback: ищем кнопку по тексту "Accept all" (чувствительность к регистру учтём)
-    const xpathCandidates = [
-      "//button[contains(normalize-space(.), 'Accept all')]",
-      "//button[contains(., 'Accept all')]",
-      "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), 'accept all')]"
-    ];
+  // XPath fallback by text (case-insensitive)
+  const xps = [
+    "//button[contains(normalize-space(.),'Accept all')]",
+    "//button[contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'accept all')]",
+    "//button[contains(translate(normalize-space(.),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'accept')]"
+  ];
 
-    for (const xp of xpathCandidates) {
-      try {
-        const handles = await consentFrame.$x(xp);
-        if (handles && handles.length) {
-          await handles[0].click();
-          console.log("Clicked accept button via XPath:", xp);
-          return true;
-        }
-      } catch (e) {
-        // ignore
+  for (const xp of xps) {
+    try {
+      const handles = await consentFrame.$x(xp);
+      if (handles && handles.length) {
+        await handles[0].click().catch(()=>null);
+        console.log("Clicked accept button via xpath:", xp);
+        return true;
       }
-    }
-  } catch (err) {
-    console.log("Error while clicking inside consent frame:", err.message);
+    } catch {}
   }
 
   console.log("Accept button not found inside consent iframe.");
@@ -106,9 +89,9 @@ async function clickAcceptInConsentFrame(page) {
 async function removeSpMessageContainers(page) {
   try {
     await page.evaluate(() => {
-      document.querySelectorAll("div[id^='sp_message_container_']").forEach(el => el.remove());
+      document.querySelectorAll("div[id^='sp_message_container_']").forEach(e => e.remove());
     });
-    await setTimeout(300);
+    await delay(300);
     console.log("Removed sp_message_container_ nodes (fallback).");
     return true;
   } catch (e) {
@@ -117,68 +100,64 @@ async function removeSpMessageContainers(page) {
   }
 }
 
-async function run() {
-  console.log("Start screenshot.js");
+/* ---------- helper: ensure cards loaded ---------- */
+async function waitForCards(page, attempts = 8) {
+  for (let i = 0; i < attempts; i++) {
+    const count = await page.$$eval("a.group", els => els.length).catch(()=>0);
+    if (count && count > 0) {
+      return count;
+    }
+    await delay(1000 + i*200);
+  }
+  return 0;
+}
 
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-    defaultViewport: { width: 1280, height: 900 }
-  });
-
+/* ---------- core: capture for a theme ---------- */
+async function captureForTheme(browser, theme, suffix) {
   const page = await browser.newPage();
-  await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36");
-  await page.evaluateOnNewDocument(() => { Object.defineProperty(navigator, "webdriver", { get: () => false }); });
 
-  // Устанавливаем тему сайта через localStorage до загрузки
-  const THEME = process.env.F1_THEME || "dark";  // либо "light"
-  await page.goto("about:blank");
-  await page.evaluate(theme => {
+  // set user agent + anti-detect
+  await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36");
+  await page.evaluateOnNewDocument((t) => {
     try {
-      sessionStorage.setItem("dark-mode", theme);
-    } catch (e) {}
-  }, THEME);
-   
-  console.log("Go to:", URL);
+      sessionStorage.setItem("dark-mode", t);
+    } catch {}
+    Object.defineProperty(navigator, "webdriver", { get: () => false });
+  }, theme);
+
+  // navigate
+  await page.goto("about:blank", { waitUntil: "domcontentloaded" });
+  // Now go to target; evaluateOnNewDocument will set sessionStorage for the origin when loads
   await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 60000 });
 
-  // Ждём появления карточек (react)
-  try {
-    await page.waitForSelector("a.group", { timeout: 20000 });
-  } catch (e) {
-    console.warn("a.group not found in initial wait:", e.message);
-  }
+  // wait for cards (React)
+  const cnt = await waitForCards(page, 12);
+  console.log(`[${theme}] initial card count: ${cnt}`);
 
-  // Небольшая пауза — даём React подгрузиться
-  await setTimeout(1200);
-
-  // Попробуем нажать Accept внутри iframe (наиболее корректно)
+  // small delay, then handle consent
+  await delay(800);
   let accepted = false;
   try {
     accepted = await clickAcceptInConsentFrame(page);
   } catch (e) {
-    console.log("Error clicking consent frame:", e.message);
     accepted = false;
   }
-
   if (!accepted) {
-    // Если не получилось нажать — пробуем удалить контейнеры (фоллбек)
     await removeSpMessageContainers(page);
   } else {
-    // Если кликнули — подождём исчезновения контейнера
     try {
-      await page.waitForFunction(() => !document.querySelector("div[id^='sp_message_container_']"), { timeout: 5000 });
-      console.log("Consent container disappeared after click.");
-    } catch (e) {
-      console.log("Consent container did not disappear automatically after click; applying fallback removal.");
-      await removeSpMessageContainers(page);
-    }
+      await page.waitForFunction(() => !document.querySelector("div[id^='sp_message_container_']"), { timeout: 4000 }).catch(()=>null);
+      await delay(400);
+    } catch {}
   }
 
-  // Небольшая стабилизация
-  await setTimeout(700);
+  // extra stabilization & scroll to trigger lazy loads
+  await page.evaluate(() => { window.scrollTo(0, 400); });
+  await delay(400);
+  await page.evaluate(() => { window.scrollTo(0, 0); });
+  await delay(400);
 
-  // Сейчас берём HTML (после принятия/удаления баннера) и парсим
+  // get html and parse with cheerio for consistent parsing logic
   const html = await page.content();
   const $ = cheerio.load(html);
 
@@ -193,79 +172,182 @@ async function run() {
     if (parsed) cards.push({ index: i, title, dateText, parsed });
   });
 
-  console.log("Parsed cards:", cards.length);
-  //Debug files saving starts here
-  console.log("Saving debug files…");
-  fs.writeFileSync("debug.html", await page.content());
-  await page.screenshot({ path: "debug.png", fullPage: true });
-  //Debug files saving endpoint
-  cards.slice(0,6).forEach((c,idx) => console.log(`#${idx}: ${c.title} — ${c.dateText}`));
-
+  console.log(`[${theme}] parsed ${cards.length} cards`);
+  // determine next/last according to rule: next if today <= end
   const now = new Date();
-  // Normalize date (strip time)
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
-  const past = cards.filter(c => c.parsed && c.parsed.end < today).sort((a,b) => b.parsed.end - a.parsed.end);
-  const nextCandidates = cards.filter(c => c.parsed && c.parsed.end >= today).sort((a,b) => a.parsed.start - b.parsed.start);
+  const past = cards.filter(c => c.parsed && c.parsed.end < today).sort((a,b)=>b.parsed.end - a.parsed.end);
+  const nextCandidates = cards.filter(c => c.parsed && c.parsed.end >= today).sort((a,b)=>a.parsed.start - b.parsed.start);
 
-  const lastRace = past.length ? past[0] : null;
-  const nextRace = nextCandidates.length ? nextCandidates[0] : null;
+  const lastRace = past[0] ?? null;
+  const nextRace = nextCandidates[0] ?? null;
 
-  console.log("Determined nextRace:", nextRace ? `${nextRace.title} ${nextRace.dateText}` : "NONE");
-  console.log("Determined lastRace:", lastRace ? `${lastRace.title} ${lastRace.dateText}` : "NONE");
+  console.log(`[${theme}] next: ${nextRace ? nextRace.title + " " + nextRace.dateText : "NONE"}`);
+  console.log(`[${theme}] last: ${lastRace ? lastRace.title + " " + lastRace.dateText : "NONE"}`);
 
-  // Получаем актуальные element handles
+  // take element handles live (avoid detached)
   const handles = await page.$$("a.group");
-  console.log("Found handles:", handles.length);
-
-  async function screenshotByCard(card, filename) {
-    if (!card) {
-      console.log("No card for", filename);
-      return;
-    }
-    const idx = card.index;
-    // снова находить handle, но берём из handles массив
-    const handle = handles[idx];
-    if (!handle) {
-      console.warn("Handle not found by index, trying fallback by title...");
-      // пробуем найти по тексту внутри DOM (evaluate)
-      const found = await page.$$eval("a.group", (nodes, title) => {
-        for (let i = 0; i < nodes.length; i++) {
-          if ((nodes[i].innerText || "").includes(title)) return i;
+  async function screenshotCard(card, outPath) {
+    if (!card) { console.log(`[${theme}] skip ${outPath} (no card)`); return false; }
+    // find current index by scanning handles and matching title/date to be robust
+    for (let i = 0; i < handles.length; i++) {
+      try {
+        const ok = await handles[i].evaluate((el, t, d) => {
+          const text = (el.innerText || "").replace(/\s+/g," ").trim();
+          return (t && text.includes(t)) || (d && text.includes(d));
+        }, card.title, card.dateText);
+        if (ok) {
+          try {
+            await handles[i].evaluate(el => el.scrollIntoView({ behavior: "auto", block: "center" }));
+            await delay(500);
+            await handles[i].screenshot({ path: outPath });
+            console.log(`[${theme}] Saved ${outPath}`);
+            return true;
+          } catch (e) {
+            console.warn(`[${theme}] Screenshot failed for ${outPath}:`, e.message);
+            return false;
+          }
         }
-        return -1;
-      }, card.title);
-      if (found >= 0 && found < handles.length) {
-        try {
-          await handles[found].screenshot({ path: filename });
-          console.log("Saved (fallback) ", filename);
-          return;
-        } catch (e) {
-          console.error("Fallback screenshot failed:", e.message);
-          return;
-        }
+      } catch {
+        // skip detached handle or evaluate error
       }
-      return;
+    }
+    // fallback: attempt to find by text each time
+    const foundIndex = await page.$$eval("a.group", (nodes, t, d) => {
+      for (let k=0;k<nodes.length;k++){
+        const text = (nodes[k].innerText||"").replace(/\s+/g," ").trim();
+        if ((t && text.includes(t)) || (d && text.includes(d))) return k;
+      }
+      return -1;
+    }, card.title, card.dateText).catch(()=>-1);
+
+    if (foundIndex >=0) {
+      try {
+        const handlesNow = await page.$$("a.group");
+        await handlesNow[foundIndex].evaluate(el => el.scrollIntoView({ behavior: "auto", block: "center" }));
+        await delay(400);
+        await handlesNow[foundIndex].screenshot({ path: outPath });
+        console.log(`[${theme}] Saved (fallback) ${outPath}`);
+        return true;
+      } catch (e) {
+        console.warn(`[${theme}] Fallback screenshot failed:`, e.message);
+        return false;
+      }
     }
 
-    try {
-      await handle.evaluate(el => el.scrollIntoView({ behavior: "auto", block: "center" }));
-      await setTimeout(600);
-      await handle.screenshot({ path: filename });
-      console.log("Saved", filename);
-    } catch (err) {
-      console.error("Screenshot error for", filename, err.message);
-    }
+    console.warn(`[${theme}] Could not locate element for ${outPath}`);
+    return false;
   }
 
-  await screenshotByCard(nextRace, "f1_next_race.png");
-  await screenshotByCard(lastRace, "f1_last_race.png");
+  const okNext = await screenshotCard(nextRace, `f1_next_race_${suffix}.png`);
+  const okLast = await screenshotCard(lastRace, `f1_last_race_${suffix}.png`);
 
-  await browser.close();
-  console.log("Finished.");
+  await page.close();
+
+  return {
+    theme,
+    suffix,
+    nextRace, lastRace,
+    okNext, okLast
+  };
 }
 
-run().catch(err => {
-  console.error("Unhandled error:", err);
+/* ---------- combine images horizontally using sharp (if available) ---------- */
+async function combineImages(leftPath, rightPath, outPath) {
+  try {
+    const sharpModule = await import('sharp');
+    const sharp = sharpModule.default ?? sharpModule;
+    // read buffers
+    const left = fs.readFileSync(leftPath);
+    const right = fs.readFileSync(rightPath);
+    const imgL = sharp(left);
+    const imgR = sharp(right);
+    const metaL = await imgL.metadata();
+    const metaR = await imgR.metadata();
+    // scale heights to the same max height (choose min of heights to avoid upscaling)
+    const targetHeight = Math.min(metaL.height || 0, metaR.height || 0) || Math.max(metaL.height||0, metaR.height||0);
+    const bufL = await imgL.resize({ height: targetHeight }).toBuffer();
+    const bufR = await imgR.resize({ height: targetHeight }).toBuffer();
+    // join horizontally
+    const composite = await sharp({
+      create: {
+        width: 1, height: targetHeight, channels: 4, background: { r: 0, g:0, b:0, alpha:0 }
+      }
+    })
+    .png()
+    .toBuffer();
+
+    // simplest: use sharp's join via svg canvas: create an SVG with two images embedded base64
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${metaL.width + metaR.width}" height="${targetHeight}">
+      <image href="data:image/png;base64,${bufL.toString('base64')}" x="0" y="0" height="${targetHeight}" />
+      <image href="data:image/png;base64,${bufR.toString('base64')}" x="${metaL.width}" y="0" height="${targetHeight}" />
+    </svg>`;
+    const outBuf = await sharp(Buffer.from(svg)).png().toBuffer();
+    fs.writeFileSync(outPath, outBuf);
+    console.log("Combined image created:", outPath);
+    return true;
+  } catch (e) {
+    console.warn("combineImages: sharp not available or failed:", e.message);
+    console.warn("To enable combining, run: npm install sharp");
+    return false;
+  }
+}
+
+/* ---------- main ---------- */
+async function main() {
+  console.log("Starting screenshot sequence (light + dark)...");
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: [
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--disable-blink-features=AutomationControlled"
+    ],
+    defaultViewport: { width: 1280, height: 900 }
+  });
+
+  // capture for light theme
+  const resWt = await captureForTheme(browser, "light", "wt").catch(err => {
+    console.error("Error captureForTheme light:", err);
+    return null;
+  });
+
+  // capture for dark theme
+  const resBk = await captureForTheme(browser, "dark", "bk").catch(err => {
+    console.error("Error captureForTheme dark:", err);
+    return null;
+  });
+
+  await browser.close();
+
+  // Try combine for white theme
+  const leftWt = "f1_last_race_wt.png";
+  const rightWt = "f1_next_race_wt.png";
+  if (fs.existsSync(leftWt) && fs.existsSync(rightWt)) {
+    await combineImages(leftWt, rightWt, "f1_racewidget_wt.png");
+  } else {
+    console.warn("Skipping combine white theme — files missing.");
+  }
+
+  // Combine for dark theme
+  const leftBk = "f1_last_race_bk.png";
+  const rightBk = "f1_next_race_bk.png";
+  if (fs.existsSync(leftBk) && fs.existsSync(rightBk)) {
+    await combineImages(leftBk, rightBk, "f1_racewidget_bk.png");
+  } else {
+    console.warn("Skipping combine dark theme — files missing.");
+  }
+
+  console.log("Done. Output files (if captured):");
+  ["f1_last_race_wt.png","f1_next_race_wt.png","f1_last_race_bk.png","f1_next_race_bk.png","f1_racewidget_wt.png","f1_racewidget_bk.png"]
+    .forEach(f => { if (fs.existsSync(f)) console.log(" - " + f); });
+
+}
+
+main().catch(err => {
+  console.error("Fatal:", err);
   process.exit(1);
 });
