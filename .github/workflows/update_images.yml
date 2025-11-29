@@ -22,7 +22,7 @@ jobs:
         run: npm ci || npm install
 
       - name: Run screenshot script
-        run: node screenshot.js
+        run: node screenshot1.js
 
       - name: Upload debug artifacts
         if: failure() || always()
