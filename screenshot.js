@@ -1,124 +1,106 @@
-// screenshot.js — стабильная версия для GitHub Actions
+// screenshot.js — финальная стабильная версия
 import puppeteer from "puppeteer";
-import fs from "fs";
 import * as cheerio from "cheerio";
-import sharp from "sharp";
+import fs from "fs";
 import { setTimeout } from "node:timers/promises";
+import sharp from "sharp";
 
-const URL_RACES = "https://www.formula1.com/en/racing/2025.html";
-const URL_ROOT  = "https://www.formula1.com";
+// ----------------------------------------------
+// Настройки
+// ----------------------------------------------
+const URL = "https://www.formula1.com/en/racing/2025.html";
 
-/* ----------------------------------------------
-    Вспомогательное: дата -> {start, end}
-------------------------------------------------*/
+// ----------------------------------------------
+// 1. Разбор даты "28 - 30 Nov" → start/end (UTC)
+// ----------------------------------------------
 function parseRaceDate(dateText) {
   if (!dateText) return null;
 
-  const parts = dateText.trim().split(/\s+/);
-  const nums = parts.filter(t => /^\d+$/.test(t)).map(Number);
-  const months = parts.filter(t => /^[A-Za-z]{3,}$/.test(t));
+  const tokens = dateText.trim().split(/\s+/);
+  const nums = tokens.filter(t => /^\d+$/.test(t)).map(Number);
+  const months = tokens.filter(t => /^[A-Za-z]+$/.test(t));
 
-  if (!nums.length || !months.length) return null;
+  if (nums.length === 0 || months.length === 0) return null;
 
-  const monthStr = months[months.length - 1].slice(0, 3);
-  const monthMap = {
-    Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5,
-    Jul:6, Aug:7, Sep:8, Oct:9, Nov:10, Dec:11
-  };
+  const monthShort = months[months.length - 1].slice(0, 3);
+  const monthMap = { Jan:0, Feb:1, Mar:2, Apr:3, May:4, Jun:5, Jul:6, Aug:7, Sep:8, Oct:9, Nov:10, Dec:11 };
+  const month = monthMap[monthShort] ?? 0;
 
-  const month = monthMap[monthStr] ?? 0;
-  const start = nums[0];
-  const end = nums[1] ?? nums[0];
+  const startDay = nums[0];
+  const endDay = nums[1] ?? nums[0];
 
   const year = 2025;
+
   return {
-    start: new Date(Date.UTC(year, month, start)),
-    end:   new Date(Date.UTC(year, month, end))
+    start: new Date(Date.UTC(year, month, startDay)),
+    end:   new Date(Date.UTC(year, month, endDay))
   };
 }
 
-/* ----------------------------------------------
-   Выбор следующей и последней гонки
-------------------------------------------------*/
-function pickRaces(cards) {
-  const now = new Date();
-  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+// ----------------------------------------------
+// 2. Правильная установка темы (sessionStorage)
+//    Работает: заходим на домен, пишем в storage,
+//    затем — на страницу гонок.
+// ----------------------------------------------
+async function setThemeBeforeLoad(page, theme) {
+  console.log(`Setting theme: ${theme}`);
 
-  const nextCandidates = cards.filter(c => today <= c.parsed.end);
-  const prevCandidates = cards.filter(c => today > c.parsed.end);
+  // Заходим на корень домена
+  await page.goto("https://www.formula1.com", {
+    waitUntil: "domcontentloaded",
+    timeout: 60000
+  });
 
-  nextCandidates.sort((a,b) => a.parsed.start - b.parsed.start);
-  prevCandidates.sort((a,b) => b.parsed.end - a.parsed.end);
+  // Устанавливаем sessionStorage['dark-mode']
+  await page.evaluate((t) => {
+    try {
+      sessionStorage.setItem("dark-mode", t);
+    } catch (e) {}
+  }, theme);
 
-  return {
-    next: nextCandidates[0] || null,
-    last: prevCandidates[0] || null
-  };
-}
-
-/* ----------------------------------------------
-   Cookie Banner Killer
-------------------------------------------------*/
-async function handleCookieBanner(page) {
+  // Подстраховка: эмуляция prefers-color-scheme
   try {
-    await page.waitForSelector("iframe[id^='sp_message_iframe_']", { timeout: 8000 });
-  } catch {
-    return; // нет баннера
-  }
+    await page.emulateMediaFeatures([
+      { name: "prefers-color-scheme", value: theme === "dark" ? "dark" : "light" }
+    ]);
+  } catch (e) {}
+
+  // Переходим на страницу с гонками
+  await setTimeout(250);
+  await page.goto(URL, { waitUntil: "domcontentloaded", timeout: 60000 });
+}
+
+// ----------------------------------------------
+// 3. Удаление Cookie-баннера
+// ----------------------------------------------
+async function removeCookieBanner(page) {
+  await setTimeout(1500);
 
   const frames = page.frames();
-  const frame = frames.find(f => f.url().includes("consent.formula1.com"));
-  if (frame) {
+  for (const frame of frames) {
     try {
-      const btn = await frame.waitForSelector("button[title='Accept all']", { timeout: 4000 });
-      await btn.click();
-      await setTimeout(1500);
-      return;
+      const btn = await frame.$("button[title='Accept all']");
+      if (btn) {
+        console.log("Consent button found — clicking...");
+        await btn.click();
+        await setTimeout(1500);
+        return;
+      }
     } catch {}
   }
 
-  // fallback: удаляем весь контейнер
+  console.log("Removing spam containers...");
   await page.evaluate(() => {
-    document.querySelectorAll("div[id^='sp_message_container_']").forEach(el => el.remove());
+    document.querySelectorAll("[id^='sp_message_container_']").forEach(el => el.remove());
   });
 
-  await setTimeout(1500);
+  await setTimeout(800);
 }
 
-/* ----------------------------------------------
-   Обработка одной темы (light / dark)
-------------------------------------------------*/
-async function processTheme(page, theme, outPrefix) {
-  console.log(`\n===== PROCESS THEME: ${theme} =====`);
-
-  // 1) Заходим на корень, чтобы был доступ к localStorage
-  await page.goto(URL_ROOT, { waitUntil: "domcontentloaded" });
-
-  // 2) Ставим тему
-  await page.evaluate(t => {
-    localStorage.setItem("dark-mode", t);
-  }, theme);
-
-  await setTimeout(300);
-
-  // 3) Переходим на страницу гонок
-  await page.goto(URL_RACES, { waitUntil: "domcontentloaded", timeout: 0 });
-
-  // 4) Убираем cookie всплывашку
-  await handleCookieBanner(page);
-
-  // 5) Делаем debug-файлы
-  const debugHTML = `debug_${outPrefix}.html`;
-  const debugPNG  = `debug_${outPrefix}.png`;
-
-  fs.writeFileSync(debugHTML, await page.content());
-  await page.screenshot({ path: debugPNG, fullPage: true });
-
-  console.log(`Debug saved: ${debugHTML}, ${debugPNG}`);
-
-  // 6) Парсим карточки
-  const html = await page.content();
-  const $ = cheerio.load(html);
+// ----------------------------------------------
+// 4. Поиск карточек через Cheerio
+// ----------------------------------------------
+function extractRaceCards($) {
   const cards = [];
 
   $("a.group").each((i, el) => {
@@ -128,90 +110,126 @@ async function processTheme(page, theme, outPrefix) {
       $el.find("p.typography-module_display-xl-bold__Gyl5W").first().text().trim() ||
       $el.find("p").first().text().trim();
 
-    const dateFuture =
-      $el.find("span.typography-module_technical-m-bold__JDsxP").first().text().trim();
-    const datePast =
-      $el.find("span.typography-module_technical-xs-regular__-W0Gs").first().text().trim();
+    const dateBig = $el
+      .find("span.typography-module_technical-m-bold__JDsxP")
+      .first()
+      .text()
+      .trim();
 
-    const dateText = dateFuture || datePast || "";
+    const dateSmall = $el
+      .find("span.typography-module_technical-xs-regular__-W0Gs")
+      .first()
+      .text()
+      .trim();
+
+    const dateText = dateBig || dateSmall || "";
     const parsed = parseRaceDate(dateText);
 
-    if (!parsed) return;
-
-    cards.push({ index: i, title, dateText, parsed });
+    if (title && parsed) {
+      cards.push({ index: i, title, dateText, parsed });
+    }
   });
 
-  console.log(`Parsed cards: ${cards.length}`);
-  cards.slice(0, 5).forEach(c => console.log(` - ${c.title} : ${c.dateText}`));
-
-  if (!cards.length) return null;
-
-  const races = pickRaces(cards);
-  console.log("Next:", races.next?.title, races.next?.dateText);
-  console.log("Last:", races.last?.title, races.last?.dateText);
-
-  // 7) Скриншоты
-  const handles = await page.$$("a.group");
-
-  async function doShot(card, filename) {
-    if (!card) return;
-
-    const h = handles[card.index];
-    if (!h) return;
-
-    await h.evaluate(el => el.scrollIntoView({block:"center"}));
-    await setTimeout(700);
-    await h.screenshot({ path: filename });
-    console.log("Shot:", filename);
-  }
-
-  await doShot(races.next, `f1_next_race_${outPrefix}.png`);
-  await doShot(races.last, `f1_last_race_${outPrefix}.png`);
-
-  return races;
+  return cards;
 }
 
-/* ----------------------------------------------
-   Композиция с помощью sharp
-------------------------------------------------*/
-async function compose(prefix) {
-  const left  = `f1_last_race_${prefix}.png`;
-  const right = `f1_next_race_${prefix}.png`;
+// ----------------------------------------------
+// 5. Выбор lastRace / nextRace
+// ----------------------------------------------
+function pickRaces(cards) {
+  // Сегодня по UTC (обнулим время)
+  const now = new Date();
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 
-  if (!fs.existsSync(left) || !fs.existsSync(right)) {
-    console.log(`Skipping composition for ${prefix}: files missing`);
+  const past = cards.filter(c => c.parsed.end < today);
+  const future = cards.filter(c => c.parsed.end >= today);
+
+  const lastRace  = past.length   ? past.sort((a,b)=>b.parsed.end - a.parsed.end)[0] : null;
+  const nextRace  = future.length ? future.sort((a,b)=>a.parsed.start - b.parsed.start)[0] : null;
+
+  return { lastRace, nextRace };
+}
+
+// ----------------------------------------------
+// 6. Скриншот карточки
+// ----------------------------------------------
+async function screenshotCard(page, card, filename) {
+  if (!card) return;
+
+  const els = await page.$$("a.group");
+  const handle = els[card.index];
+  if (!handle) {
+    console.log(`Cannot find card ${card.title}, index ${card.index}`);
     return;
   }
 
-  const imgLeft  = sharp(left);
-  const imgRight = sharp(right);
+  await handle.evaluate(el => el.scrollIntoView({behavior:"auto", block:"center"}));
+  await setTimeout(600);
 
-  const metaL = await imgLeft.metadata();
-  const metaR = await imgRight.metadata();
-
-  const gap = 0;
-  const totalW = metaL.width + metaR.width + gap;
-  const totalH = Math.max(metaL.height, metaR.height);
-
-  const out = `f1_racewidget_${prefix}.png`;
-
-  await sharp({
-    create: { width: totalW, height: totalH, channels: 3, background: "#000" }
-  })
-    .composite([
-      { input: left, left: 0, top: 0 },
-      { input: right, left: metaL.width + gap, top: 0 }
-    ])
-    .png()
-    .toFile(out);
-
-  console.log("Composed:", out);
+  await handle.screenshot({ path: filename });
+  console.log(`Saved: ${filename}`);
 }
 
-/* ----------------------------------------------
-                  MAIN
-------------------------------------------------*/
-(async () => {
+// ----------------------------------------------
+// 7. Композиция через sharp
+// ----------------------------------------------
+async function combineHorizontal(leftFile, rightFile, outFile) {
+  if (!fs.existsSync(leftFile) || !fs.existsSync(rightFile)) return;
+
+  const imgLeft = sharp(leftFile);
+  const imgRight = sharp(rightFile);
+
+  const leftMeta = await imgLeft.metadata();
+  const rightMeta = await imgRight.metadata();
+  const height = Math.max(leftMeta.height, rightMeta.height);
+  const width = leftMeta.width + rightMeta.width;
+
+  const bufferL = await imgLeft.png().toBuffer();
+  const bufferR = await imgRight.png().toBuffer();
+
+  await sharp({
+    create: { width, height, channels: 4, background: { r:0, g:0, b:0, alpha:0 } }
+  })
+    .composite([
+      { input: bufferL, top: 0, left: 0 },
+      { input: bufferR, top: 0, left: leftMeta.width }
+    ])
+    .png()
+    .toFile(outFile);
+
+  console.log(`Composite saved: ${outFile}`);
+}
+
+// ----------------------------------------------
+// 8. Создать папки + разложить файлы
+// ----------------------------------------------
+function organizeOutput() {
+  const dirs = ["light_theme", "dark_theme", "composite", "debug"];
+  dirs.forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive:true }); });
+
+  const move = (src, dir, rename=null) => {
+    if (!fs.existsSync(src)) return;
+    fs.renameSync(src, rename ? `${dir}/${rename}` : `${dir}/${src}`);
+  };
+
+  move("f1_last_race_wt.png",  "light_theme");
+  move("f1_next_race_wt.png",  "light_theme");
+  move("f1_last_race_bk.png",  "dark_theme");
+  move("f1_next_race_bk.png",  "dark_theme");
+
+  move("f1_racewidget_wt.png", "composite");
+  move("f1_racewidget_bk.png", "composite");
+
+  move("debug_wt.png",  "debug");
+  move("debug_wt.html", "debug");
+  move("debug_bk.png",  "debug");
+  move("debug_bk.html", "debug");
+}
+
+// ----------------------------------------------
+// 9. Основная функция
+// ----------------------------------------------
+async function processTheme(theme, prefix) {
   const browser = await puppeteer.launch({
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox"],
@@ -219,16 +237,53 @@ async function compose(prefix) {
   });
 
   const page = await browser.newPage();
+  await page.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
 
-  // Светлая тема
-  await processTheme(page, "light", "wt");
+  // Установка темы
+  await setThemeBeforeLoad(page, theme);
 
-  // Тёмная тема
-  await processTheme(page, "dark", "bk");
+  // Cookie-баннер
+  await removeCookieBanner(page);
 
-  // Композиции
-  await compose("wt");
-  await compose("bk");
+  // Снимок HTML
+  const html = await page.content();
+  fs.writeFileSync(`debug_${prefix}.html`, html);
+
+  // Debug screenshot
+  await page.screenshot({ path: `debug_${prefix}.png`, fullPage: true });
+
+  // Парсим карточки
+  const $ = cheerio.load(html);
+  const cards = extractRaceCards($);
+  console.log(`Parsed cards: ${cards.length}`);
+
+  const { lastRace, nextRace } = pickRaces(cards);
+  console.log("Last:", lastRace?.title, lastRace?.dateText);
+  console.log("Next:", nextRace?.title, nextRace?.dateText);
+
+  // Скриншоты
+  await screenshotCard(page, lastRace, `f1_last_race_${prefix}.png`);
+  await screenshotCard(page, nextRace, `f1_next_race_${prefix}.png`);
 
   await browser.close();
+}
+
+// ----------------------------------------------
+// 10. Запуск двух тем + композиции + сортировки
+// ----------------------------------------------
+(async () => {
+  console.log("=== Processing LIGHT THEME ===");
+  await processTheme("light", "wt");
+
+  console.log("=== Processing DARK THEME ===");
+  await processTheme("dark", "bk");
+
+  // Композиты
+  await combineHorizontal("f1_last_race_wt.png", "f1_next_race_wt.png", "f1_racewidget_wt.png");
+  await combineHorizontal("f1_last_race_bk.png", "f1_next_race_bk.png", "f1_racewidget_bk.png");
+
+  // Разложить по папкам
+  organizeOutput();
+
+  console.log("=== DONE ===");
 })();
